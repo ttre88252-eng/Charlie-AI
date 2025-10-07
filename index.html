@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+    <meta charset="UTF-8">
+    <title>Charlie 5.1</title>
+    
+
+  </head>
+    
+  <body>
+  <!DOCTYPE html>
+
+<html lang="es">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Charlie - Asistente Virtual</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.9.179/pdf.min.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+
+<style>
+
+body { background: #0d0d0d; color: white; font-family: Arial, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+
+h1#charlieName { font-size: 3em; font-weight: bold; text-align: center; text-transform: uppercase; background: linear-gradient(90deg, #0D47A1, #00BFFF); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 20px; }
+
+canvas { width: 250px; height: 250px; display: block; margin: 0 auto 15px auto; }
+
+.chat-box { width: 85%; max-width: 450px; height: 250px; background: #111; border: 1px solid #333; border-radius: 12px; padding: 10px; overflow-y: scroll; margin-bottom: 10px; font-size: 0.9em; }
+
+.chat-message { margin: 5px 0; padding: 5px 10px; border-radius: 10px; }
+
+.chat-message.user { background: #2196f3; color: white; text-align: right; font-size: 1.1em; font-weight: bold; }
+
+.chat-message.charlie { background: #444; color: #00BFFF; text-align: left; font-size: 1em; }
+
+.input-bar { width: 85%; max-width: 450px; background: #1e1e1e; border-radius: 25px; padding: 8px 12px; display: flex; align-items: center; gap: 10px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
+
+.input-bar button { background: none; border: none; cursor: pointer; color: #aaa; font-size: 1.3em; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: color 0.2s, background 0.2s; }
+
+.input-bar button:hover { color: white; background: rgba(255, 255, 255, 0.1); }
+
+.input-bar input { flex: 1; background: transparent; border: none; outline: none; color: white; font-size: 1em; padding: 8px 0; min-width: 0; }
+
+.recording { color: #FF1744 !important; animation: pulse 1s infinite; }
+
+@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+
+#fileInput { display: none; }
+
+</style>
+
+</head>
+
+<body>
+
+<h1 id="charlieName">CHARLIE</h1>
+
+<canvas id="sphere" width="250" height="250"></canvas>
+
+<div class="chat-box" id="chat"></div>
+
+<div class="input-bar">
+
+  <button id="attachBtn" title="Adjuntar archivo">➕️</button>
+
+  <button id="stopSpeakBtn" title="Silenciar">🔇</button>
+
+  <input type="text" id="userInput" placeholder="Pregúntale a Charlie...">
+
+  <button id="micBtn" title="Grabar voz">🎤</button>
+
+  <button id="sendBtn" title="Enviar mensaje">➤</button>
+
+</div>
+
+<input type="file" id="fileInput" accept=".pdf,image/*">
+
+<script>
+
+// --- VARIABLES ---
+
+const apiKey="AIzaSyBU-KV-hnqQmKBYw-GBZeE6TLY-PS1jCog";
+
+const chatBox=document.getElementById("chat");
+
+const userInput=document.getElementById("userInput");
+
+const sendBtn=document.getElementById("sendBtn");
+
+const attachBtn=document.getElementById("attachBtn");
+
+const stopSpeakBtn=document.getElementById("stopSpeakBtn");
+
+const micBtn=document.getElementById("micBtn");
+
+const fileInput=document.getElementById("fileInput");
+
+let speaking=false, voices=[], currentFile=null, recognition=null;
+
+// --- VOZ ---
+
+function loadVoices(){ voices=speechSynthesis.getVoices().filter(v=>v.lang.includes("es")); }
+
+speechSynthesis.onvoiceschanged=loadVoices; loadVoices();
+
+function speak(text){ speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); u.lang="es-ES"; u.voice=voices[0]||null; speaking=true; u.onend=()=>speaking=false; speechSynthesis.speak(u);}
+
+function stopSpeaking(){ speechSynthesis.cancel(); speaking=false;}
+
+function removeEmojis(text){ return text.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|[\uD83C-\uDBFF\uDC00-\uDFFF])/g,""); }
+
+function addMessage(sender,text){ 
+
+  const msg=document.createElement("div"); 
+
+  msg.classList.add("chat-message",sender); 
+
+  msg.innerText=(sender==="user"?"Tú: ":"Charlie: ") + removeEmojis(text); 
+
+  chatBox.appendChild(msg); 
+
+  msg.scrollIntoView({behavior:"smooth", block:"start"});
+
+}
+
+// --- ARCHIVOS ---
+
+attachBtn.addEventListener("click", ()=> fileInput.click());
+
+fileInput.addEventListener("change", async (e) => {
+
+    const file = e.target.files[0];
+
+    if(!file) return;
+
+    currentFile={ file, text:"" };
+
+    userInput.value="📄 "; // Coloca emoji en la barra
+
+    let extractedText="";
+
+    if(file.type==="application/pdf"){
+
+        const pdf=await pdfjsLib.getDocument(URL.createObjectURL(file)).promise;
+
+        for(let i=1;i<=pdf.numPages;i++){
+
+            const page=await pdf.getPage(i);
+
+            const content=await page.getTextContent();
+
+            extractedText+=content.items.map(it=>it.str).join(" ")+"\n";
+
+        }
+
+    } else if(file.type.startsWith("image/")){
+
+        const { data:{ text } } = await Tesseract.recognize(file,"spa");
+
+        extractedText=text.trim();
+
+    }
+
+    currentFile.text=extractedText;
+
+    speak("Archivo procesado, ya puedes preguntarme sobre él");
+
+});
+
+// --- ENVÍO DE MENSAJE ---
+
+async function sendMessage(){
+
+    let text=userInput.value.trim();
+
+    if(!text) return;
+
+    // --- COMANDOS INTEGRADOS ---
+
+    const lower = text.toLowerCase();
+
+    if(lower.includes("elimina todo") || lower.includes("borrar todo") || lower.includes("limpia chat")){
+
+        chatBox.innerHTML = ""; 
+
+        currentFile = null; 
+
+        speak("He borrado todo el chat"); 
+
+        userInput.value="";
+
+        return;
+
+    }
+
+    const playMatch = lower.match(/pon (.+)/);
+
+    if(playMatch){
+
+        const query = encodeURIComponent(playMatch[1]);
+
+        speak(`Abriendo YouTube con ${playMatch[1]}`);
+
+        window.open(`https://www.youtube.com/results?search_query=${query}`, "_blank");
+
+        userInput.value="";
+
+        return;
+
+    }
+
+    const imgMatch = lower.match(/busca imágenes de (.+)/);
+
+    if(imgMatch){
+
+        const query = encodeURIComponent(imgMatch[1]);
+
+        speak(`Buscando imágenes de ${imgMatch[1]}`);
+
+        window.open(`https://www.google.com/search?tbm=isch&q=${query}`, "_blank");
+
+        userInput.value="";
+
+        return;
+
+    }
+
+    // --- LÓGICA DE ARCHIVO ---
+
+    const usarArchivo = text.startsWith("📄 "); 
+
+    if(usarArchivo) text = text.replace("📄 ",""); 
+
+    if(usarArchivo && (!currentFile || !currentFile.text)){
+
+        speak("No hay ningún archivo cargado para usar"); 
+
+        return;
+
+    }
+
+    addMessage("user", text);
+
+    userInput.value="";
+
+    const typing=document.createElement("div");
+
+    typing.className="chat-message charlie";
+
+    typing.id="typingMsg";
+
+    typing.innerText="Pensando...";
+
+    chatBox.appendChild(typing);
+
+    typing.scrollIntoView({behavior:"smooth", block:"start"});
+
+    let prompt="Responde de manera natural y amigable.\n";
+
+    if(usarArchivo && currentFile && currentFile.text){
+
+        prompt+="Usa solo el contenido del archivo para responder:\n"+currentFile.text+"\n";
+
+    }
+
+    prompt+="Pregunta: "+text+"\nRespuesta:";
+
+    try{
+
+        const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,{
+
+            method:"POST",
+
+            headers:{"Content-Type":"application/json"},
+
+            body:JSON.stringify({contents:[{parts:[{text: prompt}]}]})
+
+        });
+
+        let data=await res.json();
+
+        let reply=data.candidates?.[0]?.content?.parts?.[0]?.text || "No entendí eso";
+
+        reply = removeEmojis(reply.replace(/[*<>/_-]+/g,"").trim());
+
+        document.getElementById("typingMsg")?.remove();
+
+        addMessage("charlie", reply);
+
+        speak(reply);
+
+    } catch{
+
+        document.getElementById("typingMsg")?.remove();
+
+        addMessage("charlie","Error de conexión con Gemini");
+
+        speak("Error de conexión con Gemini");
+
+    }
+
+}
+
+// --- EVENTOS ---
+
+sendBtn.addEventListener("click",sendMessage);
+
+userInput.addEventListener("keypress",e=>{if(e.key==="Enter") sendMessage();});
+
+stopSpeakBtn.addEventListener("click",stopSpeaking);
+
+// --- MICRÓFONO ---
+
+let recording=false;
+
+micBtn.addEventListener("click",()=>{
+
+    recording=!recording;
+
+    micBtn.classList.toggle("recording",recording);
+
+micBtn.textContent = recording ? "🔴" : "🎤";
+
+stopSpeaking();
+
+if(recording){
+
+    recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+
+    recognition.lang = "es-ES";
+
+    recognition.start();
+
+    recognition.onresult = (ev) => {
+
+        const voiceText = ev.results[0][0].transcript;
+
+        userInput.value = voiceText;
+
+        sendMessage();
+
+    };
+
+    recognition.onerror = () => {
+
+        recording = false; micBtn.classList.remove("recording"); micBtn.textContent = "🎤";
+
+    };
+
+    recognition.onend = () => {
+
+        recording = false; micBtn.classList.remove("recording"); micBtn.textContent = "🎤";
+
+    };
+
+} else if(recognition){ recognition.stop(); }
+
+});
+
+// --- ESFERA ANIMADA ---
+
+const canvas = document.getElementById("sphere");
+
+const ctx = canvas.getContext("2d");
+
+const points = [];
+
+const radius = 90;
+
+const density = 80;
+
+let pulseFactor = 0;
+
+for(let i=0;i<density;i++){
+
+    const theta = Math.acos(2*Math.random()-1);
+
+    const phi = 2*Math.PI*Math.random();
+
+    points.push({theta, phi});
+
+}
+
+let angleX = 0, angleY = 0;
+
+function drawSphere(){
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    const time = Date.now()*0.005;
+
+    pulseFactor = speaking ? 1 : pulseFactor*0.9;
+
+    const pulse = 1 + 0.15 * pulseFactor * Math.sin(time*2);
+
+    points.forEach(p=>{
+
+        let x=radius*Math.sin(p.theta)*Math.cos(p.phi)*pulse;
+
+        let y=radius*Math.sin(p.theta)*Math.sin(p.phi)*pulse;
+
+        let z=radius*Math.cos(p.theta)*pulse;
+
+        let tempX = x*Math.cos(angleY)-z*Math.sin(angleY);
+
+        let tempZ = x*Math.sin(angleY)+z*Math.cos(angleY); x=tempX; z=tempZ;
+
+        let tempY = y*Math.cos(angleX)-z*Math.sin(angleX);
+
+        let tempZ2 = y*Math.sin(angleX)+z*Math.cos(angleX); y=tempY; z=tempZ2;
+
+        const scale = 300/(300+z);
+
+        const screenX = canvas.width/2 + x*scale;
+
+        const screenY = canvas.height/2 + y*scale;
+
+        const pointSize = 2+(radius+z)/60;
+
+        const opacity = 0.3+(z+radius)/(2*radius);
+
+        const brightness = speaking?255:180+30*Math.cos(time+z);
+
+        const grad = ctx.createRadialGradient(screenX,screenY,0,screenX,screenY,pointSize*3);
+
+        grad.addColorStop(0, `rgba(${brightness},${brightness},${brightness},${opacity})`);
+
+        grad.addColorStop(0.5, `rgba(0,191,255,${opacity*0.6})`);
+
+        grad.addColorStop(1, "rgba(0,191,255,0)");
+
+        ctx.fillStyle = grad;
+
+        ctx.beginPath();
+
+        ctx.arc(screenX, screenY, pointSize, 0, Math.PI*2);
+
+        ctx.fill();
+
+    });
+
+    const baseSpeed = 0.002 + 0.01 * pulseFactor;
+
+    angleX += baseSpeed; angleY += baseSpeed*1.3;
+
+    requestAnimationFrame(drawSphere);
+
+}
+
+drawSphere();
+
+</script>
+
+</body>
+
+</html>
+    
+  </body>
+  
+</html>
